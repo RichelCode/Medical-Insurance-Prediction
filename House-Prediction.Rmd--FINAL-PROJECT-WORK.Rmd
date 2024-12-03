@@ -1,0 +1,784 @@
+---
+title: "Stat 563 Project- Final"
+author: "Richel Charntel Jing Jing"
+date: "2024-11-19"
+output: html_document
+---
+
+
+
+# Introduction
+
+Understanding the factors that influence house prices is critical for stakeholders in the real estate market, including buyers, sellers, and policymakers. This project utilizes the House Prices in King County, USA dataset from Kaggle, which contains comprehensive information on house sales in King County, Washington. The dataset includes 21,613 observations and 19 features such as house attributes (square footage, number of bedrooms, and bathrooms), location-based characteristics ( zip code and proximity to waterfronts), and time of sale.
+
+The primary objective of this project is to explore the key predictors of house prices and develop a robust predictive model. By analyzing trends and patterns in the data, we aim to provide insights into how various factors contribute to housing prices and their implications for the local real estate market. In addition, the study investigates potential systemic trends, such as the impact of location and property features on price variance.
+
+The project adopts a comprehensive approach to data preprocessing, exploratory data analysis, and advanced modeling techniques to deliver actionable insights and practical recommendations for stakeholders.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(car)
+library(tidyr)
+library(dplyr)
+library(lmtest)
+library(MASS)
+```
+
+# Data Cleaning and Exploratory Data Analysis
+
+```{r 1.10}
+#installing important packages
+install.packages("corrplot")
+```
+
+```{r 1.11}
+# Load the dataset
+kc_house_data <- read.csv("C:\\Users\\EWURA\\Downloads\\Stat 563 Project\\kc_house_data.csv")
+
+# View the first few rows
+head(kc_house_data)
+```
+
+```{r 1.12}
+# Check structure and summary
+str(kc_house_data)
+summary(kc_house_data)
+
+# Check for missing values
+colSums(is.na(kc_house_data))
+
+# Check for duplicate rows
+nrow(kc_house_data) - nrow(distinct(kc_house_data))
+
+```
+
+```{r 1.13}
+# Convert 'date' to Date type
+kc_house_data$date <- as.Date(kc_house_data$date, format = "%Y%m%dT%H%M%S")
+
+# Convert categorical-like columns to factors
+kc_house_data$waterfront <- as.factor(kc_house_data$waterfront)
+kc_house_data$view <- as.factor(kc_house_data$view)
+kc_house_data$condition <- as.factor(kc_house_data$condition)
+kc_house_data$grade <- as.factor(kc_house_data$grade)
+
+```
+
+
+```{r 1.14}
+# Boxplot for price
+boxplot(kc_house_data$price, main = "Boxplot for Price", horizontal = TRUE)
+
+# Filter out extreme values
+kc_house_data <- kc_house_data %>%
+  filter(bedrooms <= 10, sqft_lot < quantile(sqft_lot, 0.99))
+
+#Extracting year and month from the date column
+#Grouping yr_built into decades
+kc_house_data <- kc_house_data %>%
+  mutate(year_sold = year(date),
+         month_sold = month(date),
+         decade_built = floor(yr_built / 10) * 10)
+```
+
+We filters out rows where the number of bedrooms exceeds 10; since this is an unusual case in real life. Not that we can have such a situation, but it is rare.
+The 99th percentile here means we exclude only the top 1% of data points. These values are often outliers that represent unusually  rare lot sizes that can distort statistical analysis.
+By keeping 99% of the data, we retain almost all the observations while removing extreme values that may heavily influence the results.
+
+
+```{r 1.15}
+# Recheck outliers after filtering
+boxplot(kc_house_data$price, main = "Boxplot for Price (After Filtering)", horizontal = TRUE)
+
+# Correlation between sqft_lot and price
+cor <- cor(kc_house_data$sqft_lot, kc_house_data$price)
+cor
+```
+The correlation between sqft_lot and price is 0.1120, thus a weak positive relationship. 
+Given this weak positive correlation (0.1120) between sqft_lot and price, filtering based on sqft_lot does not significantly impact outliers in price. This is the reason why the boxplots for price displayed above remain unchanged even after filtering.
+
+
+```{r 1.16}
+# Calculate IQR for price
+Q1 <- quantile(kc_house_data$price, 0.25)
+Q3 <- quantile(kc_house_data$price, 0.75)
+IQR <- Q3 - Q1
+
+# Define lower and upper bounds for price
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+# Filter rows within bounds
+kc_house_data <- kc_house_data %>%
+  filter(price >= lower_bound & price <= upper_bound)
+
+```
+
+
+```{r 1.17}
+# Recheck boxplot for price
+boxplot(kc_house_data$price, main = "Boxplot for Price (After Removing Outliers)", horizontal = TRUE)
+
+```
+The IQR method is a common approach for dealing with outliers. It is not sufficient for this dataset due to the large range and skewness of price.
+The price variable is heavily skewed,hence we apply a log transformation to stabilize the variability and make the distribution more symmetric.
+
+# Exploratory Data Analysis
+
+```{r 1.18}
+summary(kc_house_data$price)
+summary(kc_house_data$sqft_living)
+```
+
+
+```{r 1.19}
+ggplot(kc_house_data, aes(x = price)) +
+  geom_histogram(bins = 30, fill = "blue", color = "white") +
+  labs(title = "Distribution of House Prices", x = "Price", y = "Count")
+```
+
+The histogram above illustrates the distribution of house prices in King County. 
+The distribution is right-skewed, with the majority of houses priced below $500,000. This suggests that most properties fall within a mid-range price category, while fewer properties are available at higher price points, with a long tail extending towards more expensive homes. 
+
+
+```{r 1.20}
+ggplot(kc_house_data, aes(x = sqft_living, y = price)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Price vs. Square Footage", x = "Square Footage", y = "Price")
+```
+The scatterplot shows the relationship between house prices and square footage in King County. There is a clear positive correlation, as larger houses (in terms of square footage) tend to have higher prices. However, the relationship is not perfectly linear, with some variability in price for houses with similar square footage, likely due to other influencing factors such as location, condition, or additional features. The plot also shows a few outliers where properties with extremely high square footage or price deviate significantly from the general trend.
+
+
+```{r 1.21}
+ggplot(kc_house_data, aes(x = as.factor(waterfront))) +
+  geom_bar(fill = "purple") +
+  labs(title = "Count of Waterfront Properties", x = "Waterfront (1 = Yes, 0 = No)", y = "Count")
+```
+The bar chart illustrates the distribution of waterfront properties in the dataset. It shows that the majority of houses in King County do not have waterfront access (represented by `0`), while a very small fraction of houses are located on waterfronts (represented by `1`).
+
+
+```{r 1.22}
+ggplot(kc_house_data, aes(x = sqft_living)) +
+  geom_histogram(bins = 30, fill = "green", color = "white") +
+  labs(title = "Distribution of Living Area", x = "Living Area (sqft)", y = "Count")
+```
+The histogram displays the distribution of living area (in square feet) for houses in King County. The data is slightly right-skewed, with the majority of homes having a living area between 1,000 and 3,000 square feet. A small number of houses have exceptionally large living areas, exceeding 4,000 square feet, which contribute to the skewness. This pattern highlights that most homes are of moderate size, while a few larger properties may significantly influence the mean living area.
+
+
+```{r 1.23}
+ggplot(kc_house_data, aes(x = as.factor(grade))) +
+  geom_bar(fill = "orange") +
+  labs(title = "Distribution of Grades", x = "Grade", y = "Count")
+```
+The bar chart shows the distribution of house grades in King County, where grades represent the overall construction and design quality. The majority of houses are assigned grades between 7 and 8, indicating average to slightly above-average quality. Very few houses fall at the extreme ends of the scale (grades 1–5 or 10–12), highlighting that most homes in this dataset are concentrated around the mid-range of the grading system.
+
+
+```{r 1.24}
+kc_house_data$floors <- ceiling(kc_house_data$floors)
+
+kc_house_data$bathrooms <- ceiling(kc_house_data$bathrooms)
+
+kc_house_data$bedrooms<- ceiling(kc_house_data$bedrooms)
+
+# Compute correlation matrix
+cor_matrix <- cor(kc_house_data %>% select_if(is.numeric), use = "complete.obs")
+
+# Convert correlation matrix into a tidy format using tidyr
+melted_cor <- as.data.frame(as.table(cor_matrix))
+
+# Create the heatmap with viridis colors
+ggplot(data = melted_cor, aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "plasma", name = "Correlation", limits = c(-1, 1)) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9)
+  ) +
+  labs(title = "Correlation Heatmap", x = "", y = "")
+```
+The correlation heatmap highlights the relationships among numerical variables in the dataset, revealing key patterns. House prices (price) show strong positive correlations with sqft_living and bathrooms, indicating that larger homes with more amenities are generally more expensive. Moderate correlations are observed between price and variables like grade and sqft_living15, suggesting that construction quality and neighborhood characteristics also influence prices. While variables like zipcode, yr_built, and yr_renovated show weak or negligible correlations with price, sqft_living and sqft_above exhibit high multicollinearity, indicating potential redundancy that must be managed in modeling. The heatmap effectively identifies important predictors and potential multicollinearity issues.
+
+
+```{r 1.25}
+ggplot(kc_house_data, aes(x = bathrooms, y = price)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Price vs. Bathrooms", x = "Number of Bathrooms", y = "Price")
+
+```
+The scatterplot shows the relationship between house prices and the number of bathrooms. There is a general trend indicating that houses with more bathrooms tend to have higher prices, as the points shift upwards with an increasing number of bathrooms. However, the data also exhibits significant clustering, especially at common values like 2 and 3 bathrooms, reflecting their prevalence in the dataset. The spread of prices widens as the number of bathrooms increases, suggesting greater variability in house features and values for homes with more bathrooms. Outliers are present, particularly for houses with an unusually high number of bathrooms, which may reflect luxury properties.
+
+```{r 1.26}
+ggplot(kc_house_data, aes(x = as.factor(waterfront), y = price, fill = as.factor(waterfront))) +
+  geom_boxplot(outlier.color = "red", outlier.size = 2) +  # Customize outliers
+  scale_fill_manual(values = c("skyblue", "orange")) +     # Add custom colors
+  labs(
+    title = "Price Distribution by Waterfront",
+    x = "Waterfront (1 = Yes, 0 = No)",
+    y = "Price",
+    fill = "Waterfront"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+The boxplot compares house prices between waterfront and non-waterfront properties. It clearly shows that waterfront properties (denoted by 1) tend to have significantly higher prices than non-waterfront properties (denoted by 0). The median price for waterfront properties is much higher, and their interquartile range (IQR) indicates greater variability in prices. Non-waterfront properties, while more common, have a lower median and a narrower IQR. This highlights the premium associated with waterfront properties due to their rarity and desirability.Outliers are present in both categories, indicating some exceptionally high-priced properties.
+
+
+
+```{r 1.27}
+ggplot(kc_house_data, aes(x = as.factor(grade), y = price, fill = as.factor(grade))) +
+  geom_boxplot(outlier.color = "red", outlier.size = 2) +  # Customize outliers
+  scale_fill_brewer(palette = "Set3") +                   # Use a predefined color palette
+  labs(
+    title = "Price Distribution by Grade",
+    x = "Grade",
+    y = "Price",
+    fill = "Grade"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+```
+The boxplot shows the distribution of house prices across different grades, which represent the quality of construction and design. There is a clear upward trend, with higher grades associated with higher median prices and wider interquartile ranges (IQRs). Lower grades, such as 1 to 4, have narrow IQRs and lower prices, while grades 10 and above exhibit much higher medians and greater variability in price. The plot also reveals a higher frequency of outliers in the upper grades, indicating some exceptionally expensive properties. This strong relationship between grade and price highlights the importance of construction quality as a predictor for house prices.
+
+
+```{r 1.28}
+ggplot(kc_house_data, aes(x = sqft_living, y = price, color = as.factor(grade))) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Price vs. Living Area by Grade", x = "Living Area (sqft)", y = "Price", color = "Grade")
+```
+
+The scatterplot illustrates the relationship between house prices and living area, with points color-coded by grade (quality of construction). There is a clear positive trend, where houses with larger living areas generally have higher prices. Additionally, higher-grade houses tend to cluster toward the upper end of both price and living area, indicating that grade amplifies the effect of living area on price. Lower-grade homes are concentrated in the lower price and living area range, while higher-grade homes span a broader range of living areas, reflecting their premium quality. This plot highlights the combined impact of living area and grade on house prices.
+
+
+```{r 1.29}
+ggplot(kc_house_data, aes(x = long, y = lat, color = price)) +
+  geom_point(alpha = 0.5) +
+  scale_color_viridis_c() +
+  labs(title = "Geographic Distribution of House Prices", x = "Longitude", y = "Latitude", color = "Price")
+```
+
+
+The scatterplot maps the geographic distribution of house prices based on latitude and longitude. The color gradient represents house prices, with purple indicating lower prices and yellow indicating higher prices. Higher-priced homes are concentrated in specific areas, likely reflecting desirable neighborhoods or proximity to amenities such as waterfronts or urban centers. In contrast, lower-priced homes are more dispersed. This spatial pattern highlights the importance of location in determining house prices, demonstrating significant geographic variability within King County. The clustering of high-priced properties suggests localized demand for premium homes.
+
+
+
+```{r 1.30}
+ggplot(kc_house_data, aes(x = as.factor(floors), y = price, fill = as.factor(floors))) +
+  geom_boxplot(outlier.color = "red", outlier.size = 2) +
+  scale_fill_brewer(palette = "Pastel1") +
+  labs(
+    title = "Price Distribution by Number of Floors",
+    x = "Number of Floors",
+    y = "Price",
+    fill = "Floors"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+The boxplot illustrates the relationship between house prices and the number of floors. Houses with 1.5 to 2.5 floors exhibit higher median prices compared to single-story houses. As the number of floors increases, the range of prices also broadens, reflecting a greater variability in multi-floor properties. Outliers are evident for 1-floor and 3-floor homes, representing houses with significantly higher prices than others within the same category. This suggests that while the number of floors contributes to price, other factors might have a stronger influence.
+
+
+```{r 1.31}
+ggplot(kc_house_data, aes(x = yr_built, y = price, color = price)) +
+  geom_point(alpha = 0.5) +
+  scale_color_viridis_c() +
+  labs(
+    title = "Price vs. Year Built",
+    x = "Year Built",
+    y = "Price",
+    color = "Price"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14)
+  )
+
+```
+
+The scatterplot demonstrates the relationship between house prices and the year the house was built. The color gradient represents price levels, with yellow indicating higher-priced properties. Houses built in recent years (after 2000) show a tendency for higher prices compared to older homes. However, there is a considerable overlap in prices across years, suggesting that factors other than the year built, may play a more significant role in determining house prices.
+
+
+```{r 1.32}
+ggplot(kc_house_data, aes(x = as.factor(condition), y = price, fill = as.factor(condition))) +
+  geom_boxplot(outlier.color = "red", outlier.size = 2) +
+  scale_fill_brewer(palette = "Dark2") +
+  labs(
+    title = "Price Distribution by Condition",
+    x = "Condition",
+    y = "Price",
+    fill = "Condition"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+This boxplot highlights how house prices vary with the condition of the property, rated from 1 (poor) to 5 (excellent). As the condition improves, the median price increases, with homes in excellent condition (rating 5) having the highest median price. The variability of prices also grows with better condition ratings, reflecting the presence of premium houses in the higher ranges. Outliers are most prominent for lower condition ratings, indicating some houses in poor condition still command higher prices, likely due to other influential factors like location or unique features.
+
+
+```{r 1.33}
+kc_house_data %>%
+  group_by(bedrooms, bathrooms) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x = as.integer(bedrooms), y = as.integer(bathrooms), fill = count)) +  # Convert to integers
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "Count") +
+  scale_x_continuous(breaks = scales::breaks_pretty(n = 10)) +  # Ensure only integer labels
+  scale_y_continuous(breaks = scales::breaks_pretty(n = 10)) +
+  labs(title = "Bathrooms vs. Bedrooms Heatmap", x = "Number of Bedrooms", y = "Number of Bathrooms") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+The heatmap illustrates the distribution of houses based on the number of bedrooms and bathrooms, with darker shades indicating higher counts. The most common configurations are houses with 3 to 4 bedrooms and 2 to 3 bathrooms, as reflected by the darkest blue region. Houses with fewer or more bedrooms and bathrooms are less frequent, as indicated by the lighter shades in other areas of the heatmap.This trend suggests that the dataset is dominated by mid-sized homes, which likely cater to average family sizes.
+
+```{r 1.34}
+# Renovated vs. Non-Renovated Boxplot
+kc_house_data %>%
+  mutate(renovated = ifelse(yr_renovated > 0, "Yes", "No")) %>%
+  ggplot(aes(x = renovated, y = price, fill = renovated)) +
+  geom_boxplot(outlier.color = "red", outlier.size = 2) +
+  scale_fill_manual(values = c("lightgreen", "lightcoral")) +
+  labs(title = "Price Distribution by Renovation Status", x = "Renovated", y = "Price", fill = "Renovated") +
+  theme_minimal()
+
+```
+
+The boxplot compares house prices for renovated and non-renovated properties. Renovated houses exhibit a higher median price and a slightly larger interquartile range compared to non-renovated properties, reflecting their added value. Additionally, there is less variability in prices for renovated homes, suggesting that they tend to be clustered in specific price ranges. Outliers are more prominent in non-renovated properties, indicating that some of these houses command significantly higher prices, likely due to other factors.
+
+
+```{r 1.35}
+# Year Built Histogram
+ggplot(kc_house_data, aes(x = yr_built)) +
+  geom_histogram(binwidth = 5, fill = "dodgerblue", color = "white") +
+  labs(title = "Distribution of Year Built", x = "Year Built", y = "Count") +
+  theme_minimal()
+```
+
+The histogram displays the distribution of houses by the year they were built. There is a noticeable increase in the number of houses constructed from the mid-20th century, peaking around the early 2000s, likely reflecting housing market booms. Construction activity is lower for homes built before 1925 and after 2010, suggesting that newer constructions are relatively rare in the dataset. This distribution provides insights into the age of the housing stock in the dataset, with most houses built between 1950 and 2000.
+
+
+### Model Building and Diagnostics
+
+````{r 1.36}
+# Remove 'id' and 'date'
+kc_house_data <- kc_house_data[, !names(kc_house_data) %in% c("id", "date")]
+
+# Fit the full model
+full_model <- lm(price ~ ., data = kc_house_data)
+
+# Fit the full regression model
+full_model <- lm(price ~ ., data = kc_house_data)
+
+# Summarize the model
+summary(full_model)
+
+````
+
+The multiple linear regression model explains 70.36% of the variability in house prices (\(R^2 = 0.7036\)) and 70.31% when adjusted for the number of predictors (\( \text{Adjusted } R^2 = 0.7031\)). The residual standard error is 113,200, indicating the average deviation of predicted prices from observed prices. Significant predictors (\(p < 0.05\)) include structural features such as bedrooms, bathrooms,sqft_living, and floors, as well as location variables like waterfront, view, zipcode, lat, and long. Temporal factors like year_sold and month_sold are also significant, reflecting the impact of market timing on house prices. Some levels of categorical variables (grade10, grade11, grade12) and conditions are also influential, whereas lower grades (grade3 to grade8) and certain conditions are not statistically significant (\(p > 0.05\)). Latitude (lat) and square footage (sqft_living) have strong positive effects, with each additional square foot increasing price by \$73.82 on average. 
+
+
+```{r 1.37}
+# Remove aliased columns (sqft_above and sqft_basement)
+kc_house_data <- kc_house_data[, !names(kc_house_data) %in% c("sqft_above", "sqft_basement")]
+
+# Refit the full model
+full_model <- lm(price ~ ., data = kc_house_data)
+
+# Summarize the updated model
+summary(full_model)
+
+# Check for multicollinearity
+vif(full_model)
+
+```
+The Variance Inflation Factor (VIF) analysis reveals minimal multicollinearity among most predictors, with VIF values generally well below the critical threshold of 10. However, yr_built and decade_built have exceptionally high VIF values (105.81 and 104.38, respectively), indicating severe multicollinearity, likely due to redundancy between these variables. Other variables, such as sqft_living (VIF = 4.42) and bathrooms (VIF = 2.99), exhibit moderate multicollinearity, which is manageable. Predictors like waterfront, zipcode, and lat have low VIF values (all under 2), suggesting independence. While the overall multicollinearity is not a significant concern for most predictors, addressing the collinearity between yr_built and decade_built is crucial.
+
+
+```{r 1.38}
+# Remove 'decade_built' using base R
+kc_house_data <- kc_house_data[, !names(kc_house_data) %in% "decade_built"]
+
+# Fit the updated full model
+full_model <- lm(price ~ ., data = kc_house_data)
+
+# Check VIF again
+vif(full_model)
+
+```
+The full model for predicting house price is:
+\[
+\text{price} = \beta_0 + \beta_1 \cdot \text{bedrooms} + \beta_2 \cdot \text{bathrooms} + \beta_3 \cdot \text{sqft\_living} + \beta_4 \cdot \text{sqft\_lot} + \beta_5 \cdot \text{floors} + \beta_6 \cdot \text{waterfront} + \beta_7 \cdot \text{view} + \beta_8 \cdot \text{condition} + \beta_9 \cdot \text{grade} + \beta_{10} \cdot \text{yr\_built} + \beta_{11} \cdot \text{yr\_renovated} + \beta_{12} \cdot \text{zipcode} + \beta_{13} \cdot \text{lat} + \beta_{14} \cdot \text{long} + \beta_{15} \cdot \text{sqft\_living15} + \beta_{16} \cdot \text{sqft\_lot15} + \beta_{17} \cdot \text{year\_sold} + \beta_{18} \cdot \text{month\_sold} + \epsilon
+\]
+
+After addressing multicollinearity by removing decade_built, the VIF values for all predictors have significantly improved, with no values exceeding the critical threshold of 10. The variable yr_built, which previously exhibited severe multicollinearity, now has a VIF of 2.55, indicating low multicollinearity and making it suitable for inclusion in the model. Most predictors, such as bathrooms, sqft_living, sqft_living15, and zipcode, show moderate multicollinearity with VIF values between 2 and 4, which is manageable. Other predictors, including waterfront, lat, and long, have low VIF values close to 1, indicating high independence from other variables. The removal of decade_built successfully resolved the multicollinearity issue, and the model is now more stable and interpretable. Further analysis can proceed without concerns of redundancy among predictors.
+
+
+```{r 1.39}
+plot(full_model$fitted.values, residuals(full_model), 
+     main = "Residuals vs Fitted", 
+     xlab = "Fitted Values", 
+     ylab = "Residuals")
+abline(h = 0, col = "red")
+```
+The "Residuals vs Fitted" plot is used to check the assumption of linearity in a regression model, which states that the relationship between the predictors and the response variable is linear. If the model satisfies the linearity assumption, the residuals should appear randomly scattered around the horizontal line at zero, without any discernible patterns. In this plot, while the residuals are generally centered around zero, there are some deviations, particularly at extreme fitted values, which may suggest potential non-linear relationships between the predictors and the response variable. This indicates that the linearity assumption might not be fully satisfied.
+
+```{r 1.40}
+qqnorm(residuals(full_model), main = "Normal Q-Q Plot")
+qqline(residuals(full_model), col = "red")
+```
+The "Normal Q-Q Plot" is used to assess whether the residuals of the model follow a normal distribution, which is an important assumption in linear regression. In this plot, the residual quantiles are plotted against theoretical quantiles of a normal distribution. If the residuals are normally distributed, the points should align closely along the red diagonal line. In this plot, the majority of the points fall near the line, suggesting approximate normality. However, deviations at both ends (tails) indicate potential outliers or skewness in the residuals. This observation suggests that the normality assumption may not be fully satisfied, and a transformation of the response variable will be considered.
+
+
+```{r 1.41}
+plot(full_model, which = 3)  # Scale-Location plot
+```
+The Scale-Location plot, or Spread-Location plot, is used to assess the assumption of constant variance. In this plot, the square root of the standardized residuals is plotted against the fitted values, and ideally, the points should be randomly scattered around a horizontal line without any discernible pattern. However, in the provided plot, the red line shows a slight upward curvature as the fitted values increase, suggesting potential heteroscedasticity, where the residual variance is not constant. This indicates a violation of the constant variance assumption in the model. To address this issue, potential remedies include applying a transformation to the response variable to stabilize variance.
+
+```{r 1.42}
+bptest(full_model)
+```
+For the provided model, the test statistic (BP) is 1757.3, with 33 degrees of freedom and a p-value < 2.2e-16. The extremely small p-value indicates strong evidence against the null hypothesis, suggesting that heteroscedasticity is present in the model. This result confirms that the variance of residuals is not constant, consistent with observations from the Scale-Location plot. 
+
+
+```{r 1.43}
+dwtest(full_model)
+```
+
+
+```{r 1.44}
+plot(full_model, which = 5)  # Residuals vs Leverage
+```
+The Residuals vs. Leverage plot is used to identify influential points in a regression model that may have a significant impact on the model's fit. In this graph, the standardized residuals are plotted against leverage, with Cook's distance contours overlaid. Points with high leverage and large residuals can be highly influential, as they may disproportionately affect the regression coefficients.
+
+
+```{r 1.45}
+# Perform Box-Cox transformation
+boxcox_result <- boxcox(full_model, lambda = seq(-2, 2, by = 0.1))
+```
+The Box-Cox transformation plot indicates that the optimal $\lambda$ is approximately $0$, aligning with the use of a logarithmic transformation for the response variable (price).
+
+
+```{r 1.46}
+kc_house_data$log_price <- log(kc_house_data$price)
+full_model_log <- lm(log_price ~ ., data = kc_house_data)
+full_model_log
+```
+The linear model with the log-transformed response variable (log_price) adjusts relationships between predictors and the outcome, with coefficients now representing percentage changes in price. Key predictors like sqft_living (5.726e-06) and bathrooms (1.338e-02) show positive associations with higher log-transformed prices, while waterfront1 (1.064e-01), property condition, and grade levels also have strong positive impacts. Variables such as yr_built (-1.847e-04) exhibit slight negative effects. 
+
+
+```{r 1.47}
+# Residuals vs Fitted
+plot(full_model_log, which = 1)
+```
+
+
+```{r 1.48}
+# Normal Q-Q Plot
+plot(full_model_log, which = 2)
+
+```
+
+```{r 1.49}
+# Scale-Location Plot
+plot(full_model_log, which = 3)
+```
+
+```{r 1.50}
+# Residuals vs Leverage Plot
+plot(full_model_log, which = 5)
+
+```
+
+The diagnostic plots for the log-transformed model indicate potential model assumption violations. The Residuals vs. Fitted plot shows a noticeable curve, suggesting non-linearity in the relationship between predictors and the log-transformed response variable. The Normal Q-Q plot reveals deviations at the tails, indicating potential issues with normality of residuals. The Scale-Location plot exhibits a fan-shaped pattern, suggesting heteroscedasticity where variance increases with fitted values. Finally, the Residuals vs. Leverage plot highlights influential data points indicating that certain observations exert high leverage on the model and may require further investigation.
+
+```{r 1.51}
+# Breusch-Pagan Test for Homoscedasticity
+bptest(full_model_log)
+```
+
+```{r 1.52}
+# Durbin-Watson Test for Autocorrelation
+dwtest(full_model_log)
+
+```
+
+````{r 1.53}
+# Variance Inflation Factor (VIF) for Multicollinearity
+vif(full_model_log)
+````
+
+````{r 1.54}
+#Removing influential points from the data
+cooks <- cooks.distance(full_model_log)  # Calculate Cook's Distance
+threshold <- 4 / nrow(kc_house_data)     # Define threshold
+influential_points <- which(cooks > threshold)  # Get indices of influential points
+
+# Exclude influential points from the data
+refined_data <- kc_house_data[-influential_points, ]
+````
+
+
+````{r 1.55}
+# Refit the model
+full_model_log_cleaned <- lm(log_price ~ ., data = refined_data)
+
+# Summary of the new model
+summary(full_model_log_cleaned)
+
+````
+
+The refined regression model, after removing influential points, exhibits a strong fit to the data with a residual standard error of 0.07233 and an \( R^2 \) value of 0.9687, indicating that approximately 97% of the variation in the log-transformed price is explained by the predictors. Key variables such as `price`, `bathrooms`, `sqft_living`, `floors`, `waterfront1`, and `latitude` are highly significant (\( p < 0.001 \)), contributing substantially to the model. However, some predictors, like `sqft_lot15` and `month_sold`, are not statistically significant, suggesting they could be considered for exclusion in further refinement. The overall \( F \)-statistic (\( 1.834 \times 10^4 \), \( p < 0.001 \)) confirms the model's predictive power. 
+
+
+```{r 1.56}
+# Diagnostic Plots for the Refined Model
+# Generate diagnostic plots
+par(mfrow = c(2, 2)) # Set up for 2x2 grid of plots
+plot(full_model_log_cleaned) # Automatically generates Residuals vs Fitted, Q-Q, Scale-Location, and Residuals vs Leverage plots
+par(mfrow = c(1, 1)) # Reset plot layout
+```
+
+```{r 1.57}
+bptest(full_model_log_cleaned)
+```
+
+```{r 1.58}
+forward_model <- step(lm(log_price ~ 1, data = refined_data), 
+                      scope = ~ sqft_living + bathrooms + floors + bedrooms + grade + view + waterfront + sqft_lot + condition + yr_built + yr_renovated + lat + long + sqft_living15 + sqft_lot15 + year_sold + month_sold + zipcode, direction = "forward")
+```
+
+```{r 1.59}
+backward_model <- step(lm(log_price ~ ., data = refined_data), 
+                       direction = "backward")
+```
+
+
+```{r 1.60}
+both_model <- step(lm(log_price ~ 1, data = refined_data), 
+                   scope = ~ sqft_living + bathrooms + floors + bedrooms + grade + view + waterfront + sqft_lot + condition + yr_built + yr_renovated + lat + long + sqft_living15 + sqft_lot15 + year_sold + month_sold + zipcode , 
+                   direction = "both")
+
+```
+
+
+```{r 1.61}
+# Function to compute metrics for each model
+compute_model_metrics <- function(model, data) {
+  sse <- sum(residuals(model)^2)
+  r2 <- summary(model)$r.squared
+  adj_r2 <- summary(model)$adj.r.squared
+  aic <- AIC(model)
+  bic <- BIC(model)
+  
+  # Calculate Cp (Mallow's Cp)
+  cp <- sse / (var(model$residuals) * (nrow(data) - length(coef(model)))) + 2 * length(coef(model)) - nrow(data)
+  
+  # Calculate PRESS
+  press <- sum((residuals(model) / (1 - lm.influence(model)$hat))^2)
+  
+  return(data.frame(SSE = sse, R2 = r2, Adj_R2 = adj_r2, AIC = aic, BIC = bic, Cp = cp))
+}
+
+# Compute metrics for all models
+metrics_forward <- compute_model_metrics(forward_model, refined_data)
+metrics_backward <- compute_model_metrics(backward_model, refined_data)
+metrics_both <- compute_model_metrics(both_model, refined_data)
+
+# Combine the results
+results <- rbind(
+  cbind(Model = "Forward", metrics_forward),
+  cbind(Model = "Backward", metrics_backward),
+  cbind(Model = "Both", metrics_both)
+)
+
+# Display the table
+results
+
+```
+Based on the comparison of the three models, **Backward Selection** outperforms the other methods with the lowest SSE (99.34), highest R² (0.9687), and Adjusted R² (0.9686), as well as the most favorable AIC (-45817.07) and BIC (-45557.96), indicating superior model fit and efficiency. In contrast, the **Forward Selection** and **Both** models yield identical results, with higher SSE (904.82), lower R² (0.7145), and Adjusted R² (0.7141), along with less favorable AIC (-3856.99) and BIC (-3613.58), making them less effective compared to Backward Selection. Thus, Backward Selection demonstrates the best balance between model fit and complexity among the three methods.
+
+
+
+```{r 1.62}
+ # Residuals vs Fitted
+plot(resid(backward_model) ~ fitted(backward_model), 
+     main = "Residuals vs Fitted", 
+     xlab = "Fitted Values", 
+     ylab = "Residuals")
+abline(h = 0, col = "red")
+
+```
+
+
+```{r 1.63}
+# Q-Q Plot
+qqnorm(resid(backward_model), main = "Normal Q-Q Plot")
+qqline(resid(backward_model), col = "red")
+
+```
+ 
+
+```{r 1.64}
+
+# Scale-Location Plot
+plot(sqrt(abs(resid(backward_model))) ~ fitted(backward_model), 
+     main = "Scale-Location", 
+     xlab = "Fitted Values", 
+     ylab = "Sqrt(|Residuals|)")
+abline(h = 0, col = "red")
+
+```
+
+```{r 1.65}
+# Residuals vs Leverage
+plot(backward_model, which = 5) # Cook's Distance
+```
+The predictors zipcode, yr_renovated, sqft_lot15, and month_sold were removed from the model as they showed minimal contributions to reducing the residual sum of squares (RSS) and had negligible impact on improving the model's overall fit, as indicated by their low sum of squares in the backward elimination output. Additionally, these predictors had higher p-values, suggesting they were not statistically significant in explaining the variability in the response variable. 
+
+```{r 1.66}
+# Updating model to remove insignificant predictors
+model_refined <- lm(log_price ~ grade + lat + sqft_living + yr_built +bedrooms+
+                      sqft_living15 + floors + condition + view +
+                      year_sold + bathrooms + waterfront, data = refined_data)
+summary(model_refined)
+
+```
+
+
+```{r 1.67}
+# Function to compute metrics for each model
+compute_model_metrics <- function(model, data) {
+  sse <- sum(residuals(model)^2)
+  r2 <- summary(model)$r.squared
+  adj_r2 <- summary(model)$adj.r.squared
+  aic <- AIC(model)
+  bic <- BIC(model)
+  
+  # Calculate Cp (Mallow's Cp)
+  cp <- sse / (var(model$residuals) * (nrow(data) - length(coef(model)))) + 2 * length(coef(model)) - nrow(data)
+  
+  
+  return(data.frame(SSE = sse, R2 = r2, Adj_R2 = adj_r2, AIC = aic, BIC = bic, Cp = cp))
+}
+
+# Compute metrics for all models
+metrics_refined <- compute_model_metrics(model_refined, refined_data)
+
+# Combine the results
+results <- rbind(
+  cbind(Model = "Refined", metrics_refined)
+)
+
+# Display the table
+results
+
+```
+
+```{r 1.68}
+
+# Plot diagnostic plots for model_refined
+par(mfrow = c(2, 2))  # Set up a 2x2 grid for plots
+plot(model_refined)
+
+# Additional individual diagnostic plots (if needed)
+# Residuals vs. Fitted
+plot(model_refined$fitted.values, resid(model_refined),
+     xlab = "Fitted Values", ylab = "Residuals", main = "Residuals vs Fitted")
+abline(h = 0, col = "red")
+
+# Scale-Location Plot
+plot(model_refined, which = 3)  # Scale-Location
+
+# Residuals vs. Leverage
+plot(model_refined, which = 5)  # Residuals vs. Leverage
+
+```
+
+
+
+```{r 1.69}
+# Fit models with interaction terms
+model_1 <- lm(log_price ~ . + waterfront:condition, data = refined_data)
+model_2 <- lm(log_price ~ . + waterfront:grade, data = refined_data)
+model_3 <- lm(log_price ~ . + bathrooms:floors, data = refined_data)
+model_4 <- lm(log_price ~ . + sqft_living:condition, data = refined_data)
+
+# Compute metrics for each model
+metrics_1 <- compute_model_metrics(model_1, refined_data)
+metrics_2 <- compute_model_metrics(model_2, refined_data)
+metrics_3 <- compute_model_metrics(model_3, refined_data)
+metrics_4 <- compute_model_metrics(model_4, refined_data)
+
+# Combine metrics into a table
+interaction_results <- rbind(
+  cbind(Model = "Waterfront:Condition", metrics_1),
+  cbind(Model = "Waterfront:Grade", metrics_2),
+  cbind(Model = "Bathrooms:Floors", metrics_3),
+  cbind(Model = "Sqft Living:Condition", metrics_4)
+)
+
+# Display the table
+interaction_results
+
+```
+
+ 
+```{r 1.70}
+# Graphical diagnostics
+par(mfrow = c(2, 2))  # Layout for 4 plots
+plot(model_4 )  # Produces Residuals vs Fitted, Q-Q Plot, Scale-Location, and Residuals vs Leverage
+```
+# Final Model Selection
+
+The refined model was selected because it demonstrated better performance compared to other models in terms of key metrics such as R², Adjusted R², AIC, and BIC, while addressing most diagnostic concerns to a reasonable extent. Although some issues remain, such as mild heteroscedasticity, slight deviations from normality in the residuals, and the presence of a few high-leverage points, these are less severe than those observed in alternative models.The refined model provides a balance between explanatory power and diagnostic validity, making it the most suitable choice for this analysis.
+
+
+# Key Findings and Insights
+
+The regression analysis focused on modeling housing prices using various predictors from the dataset (House Prices in KIng County USA). Multiple linear regression models were constructed, including forward selection, backward elimination, and stepwise approaches. The final refined model incorporated significant variables such as grade, latitude, square footage of living area (sqft_living), year built (yr_built), square footage of neighboring living area (sqft_living15), number of floors, condition, view, year sold, bathrooms, and waterfront presence. The refined model achieved an adjusted R-squared value of 0.7112, indicating that approximately 71% of the variability in the logarithm of housing prices is explained by the model. Significant predictors like latitude, sqft_living, yr_built, and bathrooms had substantial t-values and low p-values, confirming their strong relationship with housing prices. Diagnostic plots were examined to validate model assumptions, and while the model performed reasonably well, certain areas indicated potential for further improvement.
+
+# Limitations and Recommendations
+
+Despite the model's explanatory power, some limitations were identified. The presence of insignificant predictors, such as certain levels of grade and condition, suggests that the model could be further simplified without compromising its performance. Interaction terms were explored but did not significantly enhance the model's explanatory power. It is recommended to address these limitations by considering variable transformations and exploring alternative modeling techniques like generalized additive models or machine learning approaches to capture non-linear relationships and improve predictive accuracy.
+
+
